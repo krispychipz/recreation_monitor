@@ -10,6 +10,7 @@ from dotenv import load_dotenv; load_dotenv()
 import os
 from dataclasses import dataclass
 import keyring
+from typing import Optional
 
 # Configuration
 CAMPGROUND_ID = "233359"
@@ -53,7 +54,7 @@ def load_creds(service: str = SERVICE, account: str = ACCOUNT, scopes=SCOPES) ->
         keyring.set_password(service, account, creds.to_json())
     return creds
 
-def send_email(subject: str, body: str, to_addr: str, from_addr: str | None = None) -> None:
+def send_email(subject: str, body: str, to_addr: str, from_addr: Optional[str] = None) -> None:
     """Send a simple text email via Gmail API using creds from Keychain."""
     from_addr = from_addr or ACCOUNT
     creds = load_creds()
@@ -63,7 +64,7 @@ def send_email(subject: str, body: str, to_addr: str, from_addr: str | None = No
     msg["To"] = to_addr
     msg["From"] = from_addr
     msg["Subject"] = subject
-    msg.set_content(body)
+    msg.add_alternative(body, subtype="html")
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
@@ -136,7 +137,7 @@ def main():
                     f"<li><strong>Site ID:</strong> {s['site_id']} — {s['site_name']}</li>"
                     for s in available_sites
                 ])
-                body += f"</ul><p><a href='https://www.recreation.gov/camping/campsites/{CAMPGROUND_ID}?tab=campsites' target='_blank'>Book Now</a></p>"
+                body += f"</ul><p><a href='https://www.recreation.gov/camping/campgrounds/{CAMPGROUND_ID}' target='_blank'>Book Now</a></p>"
                 send_email(f"Campground Available on {CHECK_DATE}", body, ACCOUNT, ACCOUNT)
         else:
             print(f"🚫 No available sites on {CHECK_DATE}.")
