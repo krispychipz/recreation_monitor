@@ -88,6 +88,7 @@ def fetch_campsite_name(site_id: str) -> str:
     """
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     url = f"https://www.recreation.gov/api/campsite/{site_id}"
+
     try:
         resp = rate_limited_request(url, headers)
         resp.raise_for_status()
