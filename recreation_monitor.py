@@ -79,6 +79,45 @@ def send_email(subject: str, body: str, to_addr: str, from_addr: Optional[str] =
 def rate_limited_request(url, headers):
     return requests.get(url, headers=headers)
 
+
+def fetch_campsite_name(site_id: str) -> str:
+    """Lookup the human-friendly name/loop for a given campsite ID.
+
+    Tries the direct campsite endpoint first and falls back to the search
+    endpoint if the response is empty or not valid JSON.
+    """
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    url = f"https://www.recreation.gov/api/campsite/{site_id}"
+    try:
+        resp = rate_limited_request(url, headers)
+        resp.raise_for_status()
+        data = resp.json()
+        loop = data.get("loop", "")
+        camp_name = data.get("campsite_name") or data.get("name", "")
+        if loop and camp_name:
+            return f"{loop} {camp_name}".strip()
+        return loop or camp_name
+    except (requests.exceptions.RequestException, ValueError):
+        search_url = (
+            "https://www.recreation.gov/api/search/campsites"
+            f"?fq=entity_id:{site_id}&size=1"
+        )
+        try:
+            resp = rate_limited_request(search_url, headers)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results") or data.get("campsites") or []
+            if results:
+                item = results[0]
+                loop = item.get("loop", "")
+                camp_name = item.get("name", "")
+                if loop and camp_name:
+                    return f"{loop} {camp_name}".strip()
+                return loop or camp_name
+        except (requests.exceptions.RequestException, ValueError) as e:
+            print(f"⚠️ Error fetching name for site {site_id}: {e}")
+        return ""
+
 def check_availability(campground_id, check_date):
     date_obj = datetime.datetime.strptime(check_date, "%Y-%m-%d")
     start_date = date_obj.replace(day=1).strftime("%Y-%m-%dT00:00:00.000Z")
@@ -99,14 +138,21 @@ def check_availability(campground_id, check_date):
 
     for site_id, site_data in data.get("campsites", {}).items():
         status = site_data.get("availabilities", {}).get(check_datetime_str)
-        name = site_data.get("site", "").lower()
-        if any(camp in name for camp in DISREGARD_CAMPS):
+        if status != "Available":
+            continue
+
+        site_name = fetch_campsite_name(site_id)
+        name_lower = site_name.lower()
+
+        if any(camp in name_lower for camp in DISREGARD_CAMPS):
             continue  # skip unmonitored sites
-        if status == "Available":
-            available_sites.append({
-                "site_id": site_id,
-                "site_name": site_data.get("site")
-            })
+        if WATCH_CAMPS and not any(camp in name_lower for camp in WATCH_CAMPS):
+            continue
+
+        available_sites.append({
+            "site_id": site_id,
+            "site_name": site_name,
+        })
         
     return available_sites
 
