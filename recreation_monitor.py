@@ -1,7 +1,6 @@
 import requests
 import datetime
 import urllib.parse
-import smtplib
 from email.mime.text import MIMEText
 from ratelimit import limits, sleep_and_retry
 import random
@@ -10,6 +9,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv; load_dotenv()
 import os
 from dataclasses import dataclass
+import keyring
 
 # Configuration
 CAMPGROUND_ID = "233359"
@@ -27,38 +27,51 @@ class EmailConfig:
     from_email: str
     to_email: str
 
-def load_email_config() -> EmailConfig:
-    # Non-sensitive defaults can live in code or a non-secret config file
-    smtp_server = os.environ.get("EMAIL_SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(os.environ.get("EMAIL_SMTP_PORT", "587"))
-    username = os.environ["EMAIL_USERNAME"]
-    password = os.environ["EMAIL_PASSWORD"]
-    from_email = os.environ["EMAIL_FROM"]
-    to_email = os.environ["EMAIL_TO"]
+import base64, os, json
+from email.message import EmailMessage
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 
-    return EmailConfig(
-        smtp_server=smtp_server,
-        smtp_port=smtp_port,
-        username=username,
-        password=password,
-        from_email=from_email,
-        to_email=to_email,
-    )
+SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
-def send_email(subject, body, config):
-    msg = MIMEText(body, "html")
+dSCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+SERVICE = os.getenv("GMAIL_KEYRING_SERVICE", "gmail-api-token")  # must match your bootstrap script
+ACCOUNT = os.getenv("ALERT_FROM", "bae.rich@gmail.com")               # same email you used at bootstrap
+
+def load_creds(service: str = SERVICE, account: str = ACCOUNT, scopes=SCOPES) -> Credentials:
+    """Load Gmail OAuth creds JSON from Keychain, refresh if needed, then persist the update."""
+    data = keyring.get_password(service, account)
+    if not data:
+        raise RuntimeError(f"No credentials found in keyring for service={service} account={account}")
+    info = json.loads(data)
+    creds = Credentials.from_authorized_user_info(info, scopes)
+    if not creds.valid and creds.refresh_token:
+        creds.refresh(Request())
+        # Save the refreshed token set back to Keychain
+        keyring.set_password(service, account, creds.to_json())
+    return creds
+
+def send_email(subject: str, body: str, to_addr: str, from_addr: str | None = None) -> None:
+    """Send a simple text email via Gmail API using creds from Keychain."""
+    from_addr = from_addr or ACCOUNT
+    creds = load_creds()
+    service = build("gmail", "v1", credentials=creds)
+
+    msg = EmailMessage()
+    msg["To"] = to_addr
+    msg["From"] = from_addr
     msg["Subject"] = subject
-    msg["From"] = config["from_email"]
-    msg["To"] = config["to_email"]
+    msg.set_content(body)
 
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
-        with smtplib.SMTP(config["smtp_server"], config["smtp_port"]) as server:
-            server.starttls()
-            server.login(config["username"], config["password"])
-            server.send_message(msg)
+        service.users().messages().send(userId="me", body={"raw": raw}).execute()
         print("✅ Email alert sent.")
     except Exception as e:
         print(f"⚠️ Email failed: {e}")
+    
 
 @sleep_and_retry
 @limits(calls=5, period=60)  # 5 API calls max per 60 seconds
@@ -98,7 +111,6 @@ def check_availability(campground_id, check_date):
 
 def main():
     available_sites = check_availability(CAMPGROUND_ID, CHECK_DATE)
-    cfg = load_email_config()
     while True:
         PST = ZoneInfo("America/Los_Angeles")
         now = datetime.datetime.now(PST)
@@ -125,7 +137,7 @@ def main():
                     for s in available_sites
                 ])
                 body += f"</ul><p><a href='https://www.recreation.gov/camping/campsites/{CAMPGROUND_ID}?tab=campsites' target='_blank'>Book Now</a></p>"
-                send_email(f"Campground Available on {CHECK_DATE}", body, cfg)
+                send_email(f"Campground Available on {CHECK_DATE}", body, ACCOUNT, ACCOUNT)
         else:
             print(f"🚫 No available sites on {CHECK_DATE}.")
 
