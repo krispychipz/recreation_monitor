@@ -81,9 +81,14 @@ def rate_limited_request(url, headers):
 
 
 def fetch_campsite_name(site_id: str) -> str:
-    """Lookup the human-friendly name/loop for a given campsite ID."""
+    """Lookup the human-friendly name/loop for a given campsite ID.
+
+    Tries the direct campsite endpoint first and falls back to the search
+    endpoint if the response is empty or not valid JSON.
+    """
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     url = f"https://www.recreation.gov/api/campsite/{site_id}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+
     try:
         resp = rate_limited_request(url, headers)
         resp.raise_for_status()
@@ -93,8 +98,25 @@ def fetch_campsite_name(site_id: str) -> str:
         if loop and camp_name:
             return f"{loop} {camp_name}".strip()
         return loop or camp_name
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️ Error fetching name for site {site_id}: {e}")
+    except (requests.exceptions.RequestException, ValueError):
+        search_url = (
+            "https://www.recreation.gov/api/search/campsites"
+            f"?fq=entity_id:{site_id}&size=1"
+        )
+        try:
+            resp = rate_limited_request(search_url, headers)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results") or data.get("campsites") or []
+            if results:
+                item = results[0]
+                loop = item.get("loop", "")
+                camp_name = item.get("name", "")
+                if loop and camp_name:
+                    return f"{loop} {camp_name}".strip()
+                return loop or camp_name
+        except (requests.exceptions.RequestException, ValueError) as e:
+            print(f"⚠️ Error fetching name for site {site_id}: {e}")
         return ""
 
 def check_availability(campground_id, check_date):
