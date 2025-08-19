@@ -134,10 +134,13 @@ def main():
             if EMAIL_ALERTS:
                 body = "<h2>🎉 Available Campsites:</h2><ul>"
                 body += "".join([
-                    f"<li><strong>Site ID:</strong> {s['site_id']} — {s['site_name']}</li>"
+                    (
+                        f"<li><a href='https://www.recreation.gov/camping/campsites/{s['site_id']}' "
+                        f"target='_blank'><strong>Site ID:</strong> {s['site_id']} — {s['site_name']}</a></li>"
+                    )
                     for s in available_sites
                 ])
-                body += f"</ul><p><a href='https://www.recreation.gov/camping/campgrounds/{CAMPGROUND_ID}' target='_blank'>Book Now</a></p>"
+                body += "</ul>"
                 send_email(f"Campground Available on {CHECK_DATE}", body, ACCOUNT, ACCOUNT)
         else:
             print(f"🚫 No available sites on {CHECK_DATE}.")
